@@ -2,7 +2,7 @@
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
-from numba import jit,njit, float64, int16, boolean, prange 
+from numba import njit, float64, int16, prange 
 from numba.types import string, ListType, Tuple
 from numba.typed import List
 
@@ -17,6 +17,27 @@ warnings.simplefilter("ignore", NumbaExperimentalFeatureWarning)
 ## Standard deviation with axis
 @njit(float64[:](float64[:,:]), cache=True)
 def numba_std_ax0(X):
+    """Compute standard deviation along axis 0 (across rows).
+    
+    Calculates the standard deviation for each column independently.
+    Equivalent to np.std(X, axis=0) but Numba-optimized.
+    
+    Parameters
+    ----------
+    X : ndarray, shape (T, N)
+        2D array where T is number of rows and N is number of columns.
+    
+    Returns
+    -------
+    ndarray, shape (N,)
+        Standard deviation for each column.
+    
+    Notes
+    -----
+    - Numba-optimized with Numba cache enabled
+    - Substantially faster than NumPy for repeated calls
+    - Does not support NaN handling (NaN values propagate)
+    """
     result = np.zeros(X.shape[1])
     for i in range(X.shape[1]):
         result[i] = np.std(X[:,i])
@@ -49,7 +70,7 @@ def numba_reduceArray(array, fraction, method="min"):
             elif method == "last":
                 result[c,i] = chunks[c][-1,i]
             else:
-                raise ValueError("Given reduction method is invalid.")
+                ValueError("Given reduction method is invalid.") #Raising the error inside numba parallel loop causes issues
     return result
 #endregion
 
@@ -97,6 +118,36 @@ def apply_PostProcessing(postProcessing, data, parameters):
         return numba_3D_zScore(data, accuracy)
     else:
         raise ValueError("Given postprocessing method is invalid.")
+#endregion
+
+#region Standard Rolling Function Signature
+# ============================================================================
+# STANDARD SIGNATURE FOR ALL ROLLING METRIC FUNCTIONS
+# ============================================================================
+# All rolling_* functions follow this consistent signature:
+#
+#   def rolling_METRIC_NAME(
+#       data,                      # Input data (ndarray)
+#       window,                    # Window size (int)
+#       # Metric-specific parameters (if any)
+#       [optional metric params],  # e.g., kind, m, r, L, etc.
+#       # Standard post-processing parameters
+#       accuracy=8,                # Decimal rounding precision
+#       # Processing pipeline (consistent ordering)
+#       preProcessing="None",      # "None", "Min-Downsample", "Mean-Downsample"
+#       preParameters=List([...]),
+#       midProcessing="None",      # "None", "Rectangle"
+#       midParameters=List([...]),
+#       postProcessing="None",     # "None", "zScore"
+#       postParameters=List([...]),
+#   )
+#
+# Benefits:
+# - Consistent API across all metrics
+# - Processing parameters always in same position
+# - Metric-specific params grouped before accuracy
+# - Easy to extend with new metrics
+# ============================================================================
 #endregion
 
 #region Correlation
@@ -223,8 +274,8 @@ def ICC_A1(X):
     MSE=SSE/((n-1)*(k-1))
     return (MSBS-MSE)/(MSBS+(k-1)*MSE+k/n*(MSBM-MSE))
 
-@njit(float64[:,:,:](float64[:,:], int16, int16, string, string, ListType(float64), string, ListType(float64), string, ListType(float64)), parallel=True)
-def numba_rolling_ICC(data, window, accuracy=8, kind="ICC(1)", preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):
+@njit(float64[:,:,:](float64[:,:], int16, string, int16, string, ListType(float64), string, ListType(float64), string, ListType(float64)), parallel=True)
+def numba_rolling_ICC(data, window, kind="ICC(1)", accuracy=8, preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):
     """Cross-column ICC calculation of various kinds with rolling window. 
     Implementation does not use any optimization regarding rolling window
     but is quite fast due to numba-usage.
@@ -331,8 +382,8 @@ def XApEn(u, v, m, r):
     C=np.where(C==0, 1, C)
     return np.abs((1/(dim) * np.sum(np.log(C[0])))- (1/(dim-1) * np.sum(np.log(C[1]))))
 
-@njit(float64[:,:,:](float64[:,:], int16, int16, int16, float64, string, ListType(float64), string, ListType(float64), string, ListType(float64)), parallel=False)
-def numba_rolling_crossSampEn(data, window, accuracy=8, m=2 , r=0.2, preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):     
+@njit(float64[:,:,:](float64[:,:], int16, int16, float64, int16, string, ListType(float64), string, ListType(float64), string, ListType(float64)), parallel=False)
+def numba_rolling_crossSampEn(data, window, m=2, r=0.2, accuracy=8, preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):     
     data, window = apply_PreProcessing(preProcessing,data,window, preParameters)
     T=data.shape[0]
     N=data.shape[1]
@@ -361,8 +412,8 @@ def numba_rolling_crossSampEn(data, window, accuracy=8, m=2 , r=0.2, preProcessi
     windows = apply_PostProcessing(postProcessing, windows, parameters)
     return windows
 
-@njit(float64[:,:,:](float64[:,:], int16, int16, int16, float64, string, ListType(float64), string, ListType(float64), string, ListType(float64)), parallel=False)
-def numba_rolling_crossApEn(data, window, accuracy=8, m=2 , r=0.2, preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):     
+@njit(float64[:,:,:](float64[:,:], int16, int16, float64, int16, string, ListType(float64), string, ListType(float64), string, ListType(float64)), parallel=False)
+def numba_rolling_crossApEn(data, window, m=2, r=0.2, accuracy=8, preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):     
     data, window = apply_PreProcessing(preProcessing,data,window, preParameters)
     T=data.shape[0]
     N=data.shape[1]

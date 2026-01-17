@@ -1,15 +1,13 @@
 #region Import of Packages
 import numpy as np
-from numba import jit,njit, float64, int16, boolean, prange 
+from numba import njit, float64, int16, prange 
 from numba.types import string, ListType, Tuple
 from numba.typed import List
-#import numpy_ext as npx
-from antropy import app_entropy, sample_entropy
+from antropy import sample_entropy
 from sklearn.neighbors import LocalOutlierFactor
 from PyNomaly import loop
-#import rolling
 from numpy.lib.stride_tricks import sliding_window_view
-from joblib import Parallel, delayed
+
 
 import warnings
 from numba.core.errors import NumbaExperimentalFeatureWarning
@@ -24,7 +22,33 @@ cache_numba_functions=True
 #region Helper-Functions (needed directly in module for Numba compatibility)
 @njit(float64[:,:](float64[:,:], int16), parallel=True, fastmath=True, cache=cache_numba_functions)
 def numba_2D_zScore(data, accuracy=8):
-    """Calculate z-score over column axes"""
+    """Compute z-score normalization for 2D time-series data.
+    
+    Normalizes each time sample independently by subtracting the mean and
+    dividing by standard deviation. Useful for removing offset and scale
+    variations in multi-channel measurements.
+    
+    Parameters
+    ----------
+    data : ndarray, shape (T, N)
+        2D array containing time-series data where T is the number of time
+        samples and N is the number of channels/cells.
+    accuracy : int, optional
+        Number of decimal places to round the result. Default is 8.
+    
+    Returns
+    -------
+    ndarray, shape (T, N)
+        Z-score normalized data with values rounded to specified accuracy.
+        NaN values in input are preserved.
+    
+    Notes
+    -----
+    - Numba-optimized with parallelization across time dimension
+    - Uses fastmath mode for increased performance (may reduce precision)
+    - Handles NaN values by computing statistics while ignoring NaN
+    - Each time sample is normalized independently (row-wise normalization)
+    """
     T, N = data.shape
     zScore = np.empty_like(data)
     for t in prange(T):
@@ -64,7 +88,7 @@ def numba_reduceArray(array, fraction, method="min"):
             elif method == "last":
                 result[c,i] = chunks[c][-1,i]
             else:
-                raise ValueError("Given reduction method is invalid.")
+                ValueError("Given reduction method is invalid.") #Raising the error inside numba parallel loop causes issues
     return result
 #endregion
 
@@ -112,8 +136,39 @@ def apply_PostProcessing(postProcessing, data, parameters):
         return numba_2D_zScore(data, accuracy)
     else:
         raise ValueError("Given postprocessing method is invalid.")
-#endregion  
-# Numba Functions
+#endregion
+
+#region Standard Rolling Function Signature
+# ============================================================================
+# STANDARD SIGNATURE FOR ALL ROLLING METRIC FUNCTIONS
+# ============================================================================
+# All rolling_* functions follow this consistent signature:
+#
+#   def rolling_METRIC_NAME(
+#       data,                      # Input data (ndarray)
+#       window,                    # Window size (int)
+#       # Metric-specific parameters (if any)
+#       [optional metric params],  # e.g., neighbors, extent, m, r, L, kind, dt
+#       # Standard post-processing parameters
+#       accuracy=8,                # Decimal rounding precision
+#       # Processing pipeline (consistent ordering)
+#       preProcessing="None",      # "None", "Min-Downsample", "Mean-Downsample"
+#       preParameters=List([...]),
+#       midProcessing="None",      # "None", "Rectangle"
+#       midParameters=List([...]),
+#       postProcessing="None",     # "None", "zScore"
+#       postParameters=List([...]),
+#   )
+#
+# Benefits:
+# - Consistent API across all metrics
+# - Processing parameters always in same position
+# - Metric-specific params grouped at top
+# - Easy to extend with new metrics
+# ============================================================================
+#endregion
+
+#region Numba Functions
 
 
 @njit(float64[:](float64[:,:], int16), parallel=False, fastmath=True, cache=cache_numba_functions)
@@ -166,6 +221,7 @@ def numba_rolling_avgdevMean(data, window, accuracy=8, preProcessing="None", pre
     data, window = apply_PreProcessing(preProcessing,data,window, preParameters)
     T=data.shape[0]
     N=data.shape[1]
+    # Scale to mV to reduce numerical noise before differencing
     data=data*1000
     assert T>=0 and N>=0 and window >=0
     windows=np.empty((T, N), dtype=np.float64)
@@ -206,6 +262,7 @@ def numba_rolling_avgmaxdUdt(data, window, dt=0.1, accuracy=8, preProcessing="No
     scale_dt=window_0/window
     T=data.shape[0]
     N=data.shape[1]
+    # Scale to mV to stabilize finite differences
     data=data*1000
     assert T>=0 and N>=0 and window >=0
     windows=np.empty((T, N), dtype=np.float64)
@@ -292,7 +349,7 @@ def LoOP(data, neighbors, extent, accuracy):
     scores = np.around(np.array(m.local_outlier_probabilities, dtype=float), accuracy)
     return scores
 
-def rolling_LoOP(data, window, neighbors=10, extent = 3, accuracy=8,  preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):
+def rolling_LoOP(data, window, neighbors=10, extent=3, accuracy=8, preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):
     """Function that applies LoOP to a rolling window along the first dimension
 
     Args:
@@ -329,6 +386,7 @@ def rolling_LoOP(data, window, neighbors=10, extent = 3, accuracy=8,  preProcess
 
 
 #region Entropy
+# Implementation of Shannon Entropy based on Yao.2015 
 @njit(float64[:](float64[:,:], int16, string), parallel=True, cache=cache_numba_functions)
 def numba_ShanEn(X, L=10, kind='ensemble'):
     """Function for calculation of Shannon Entropy of TimeSeries with 
@@ -365,9 +423,6 @@ def numba_ShanEn(X, L=10, kind='ensemble'):
     _ranges = _bin_range(X,N, kind)
     p=np.zeros((N,L))
     for c in prange(N):
-        # if _ranges[c][0]>=_ranges[c][1]:
-        #     print(_ranges[c][0],_ranges[c][1])
-        #     print(X)
         hist, bin_edges = np.histogram(X[c], bins=L, range=(_ranges[c][0],_ranges[c][1]))
         p[c]=hist / np.sum(hist)
     H=np.empty(N)
@@ -375,8 +430,8 @@ def numba_ShanEn(X, L=10, kind='ensemble'):
         H[i]=-np.nansum(p[i]*np.log(p[i]))
     return H
 
-@njit(float64[:,:](float64[:,:], int16, int16, int16, string, string, ListType(float64), string, ListType(float64), string, ListType(float64)), parallel=True, cache=cache_numba_functions)
-def numba_rolling_ShanEn(data, window, accuracy=8, L=10, kind="local",  preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):
+@njit(float64[:,:](float64[:,:], int16, int16, string, int16, string, ListType(float64), string, ListType(float64), string, ListType(float64)), parallel=True, cache=cache_numba_functions)
+def numba_rolling_ShanEn(data, window, L=10, kind="local", accuracy=8, preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):
     """Function for rolling application of ShannonEntropy to dataset
 
     Note: The plan to define a function that generates the windows first 
@@ -419,6 +474,7 @@ def numba_rolling_ShanEn(data, window, accuracy=8, L=10, kind="local",  preProce
     return windows
 
 ## Approximate Entropy
+# Numba Implementierung für Code von # https://gist.github.com/DustinAlandzes/a835909ffd15b9927820d175a48dee41
 @njit(float64(float64[:], int16, float64), parallel=True, fastmath=True, cache=cache_numba_functions)
 def _numba_ApEn(U, m, r):
     N=U.shape[0]
