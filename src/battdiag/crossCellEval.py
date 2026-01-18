@@ -17,26 +17,17 @@ warnings.simplefilter("ignore", NumbaExperimentalFeatureWarning)
 ## Standard deviation with axis
 @njit(float64[:](float64[:,:]), cache=True)
 def numba_std_ax0(X):
-    """Compute standard deviation along axis 0 (across rows).
+    """Compute standard deviation for each column.
     
-    Calculates the standard deviation for each column independently.
-    Equivalent to np.std(X, axis=0) but Numba-optimized.
-    
-    Parameters
-    ----------
+    Arguments
+    ---------
     X : ndarray, shape (T, N)
-        2D array where T is number of rows and N is number of columns.
+        Input array where T is rows, N is columns.
     
     Returns
     -------
     ndarray, shape (N,)
-        Standard deviation for each column.
-    
-    Notes
-    -----
-    - Numba-optimized with Numba cache enabled
-    - Substantially faster than NumPy for repeated calls
-    - Does not support NaN handling (NaN values propagate)
+        Standard deviation per column.
     """
     result = np.zeros(X.shape[1])
     for i in range(X.shape[1]):
@@ -46,6 +37,20 @@ def numba_std_ax0(X):
 ## Numba implementation of zScore over column axes
 @njit(float64[:,:,:](float64[:,:,:], int16), parallel=True, fastmath=True, cache=True)
 def numba_3D_zScore(data,accuracy=8):
+    """Z-score normalize each 2D slice independently.
+    
+    Arguments
+    ---------
+    data : ndarray, shape (T, N, N)
+        3D array where T is samples, N×N is correlation matrix.
+    accuracy : int, optional
+        Decimal places for rounding. Default 8.
+    
+    Returns
+    -------
+    ndarray, shape (T, N, N)
+        Normalized 3D array, rounded to specified accuracy.
+    """
     T,N,N = data.shape
     zScore=np.empty_like(data)
     for t in prange(T):
@@ -55,7 +60,22 @@ def numba_3D_zScore(data,accuracy=8):
 ## Function downsamples data by fraction and returns updated window
 @njit(float64[:,:](float64[:,:], int16, string), parallel=True, fastmath=True, cache=True)
 def numba_reduceArray(array, fraction, method="min"):
-    """Reduce array by chunking and aggregating"""
+    """Downsample by dividing into chunks and applying aggregation method.
+    
+    Arguments
+    ---------
+    array : ndarray, shape (T, N)
+        Input array to downsample.
+    fraction : int
+        Downsampling factor; chunks have size T//fraction.
+    method : str, optional
+        Aggregation method: 'min', 'mean', 'first', or 'last'. Default 'min'.
+    
+    Returns
+    -------
+    ndarray, shape (T//fraction, N)
+        Downsampled array.
+    """
     num_chunks = array.shape[0] // fraction
     chunks = np.array_split(array, num_chunks, axis=0)
     result = np.empty((len(chunks), array.shape[1]))
@@ -70,7 +90,7 @@ def numba_reduceArray(array, fraction, method="min"):
             elif method == "last":
                 result[c,i] = chunks[c][-1,i]
             else:
-                ValueError("Given reduction method is invalid.") #Raising the error inside numba parallel loop causes issues
+                ValueError("Given reduction method is invalid.")  # Raising error inside numba parallel loop causes issues
     return result
 #endregion
 
@@ -78,6 +98,24 @@ def numba_reduceArray(array, fraction, method="min"):
 ## Pre-processing
 @njit(Tuple((float64[:,:], int16))(string, float64[:,:], int16, ListType(float64)), fastmath=True, parallel=False, cache=True)
 def apply_PreProcessing(preProcessing, data, window, parameters):
+    """Apply optional downsampling preprocessing.
+    
+    Arguments
+    ---------
+    preProcessing : str
+        Method: 'None', 'Min-Downsample', or 'Mean-Downsample'.
+    data : ndarray, shape (T, N)
+        Input time-series data.
+    window : int
+        Rolling window size; adjusted by downsampling factor if applied.
+    parameters : list of float
+        [downsampling_factor] for downsample methods.
+    
+    Returns
+    -------
+    tuple of (ndarray, int)
+        Filtered data (same shape as input) and adjusted window size.
+    """
     if preProcessing =="None":
         return data, window
     elif preProcessing =="Min-Downsample":
@@ -92,8 +130,24 @@ def apply_PreProcessing(preProcessing, data, window, parameters):
         raise ValueError("Given preprocessing method is invalid.")
 
 ## Additive Rectangle
-@njit(float64[:,:](string, float64[:,:],ListType(float64)), fastmath=True, cache=True) # Parallel verlangsamt Ausführung 
-def apply_midProcessing(midProcessing, data, parameters): # Nested dunction is better than calling an external function
+@njit(float64[:,:](string, float64[:,:],ListType(float64)), fastmath=True, cache=True)  # Parallel slows down execution 
+def apply_midProcessing(midProcessing, data, parameters):
+    """Apply windowed transformations (additive rectangle) to data.
+    
+    Arguments
+    ---------
+    midProcessing : str
+        Method: 'None' or 'Rectangle'.
+    data : ndarray, shape (T, N)
+        Input data to transform.
+    parameters : list
+        [amplitude, period] for Rectangle method.
+    
+    Returns
+    -------
+    ndarray, shape (T, N)
+        Transformed data with same shape as input.
+    """
     def numba_additiveRectangle(data, A, P):
         rectangles = np.ones_like(data)
         rectangles[np.arange(rectangles.shape[0])%(2*P)>=P,:]=-1
@@ -110,6 +164,22 @@ def apply_midProcessing(midProcessing, data, parameters): # Nested dunction is b
 ## Post-processing
 @njit(float64[:,:,:](string, float64[:,:,:], ListType(float64)), fastmath=True, cache=True)
 def apply_PostProcessing(postProcessing, data, parameters):
+    """Normalize or transform 3D data using post-processing methods.
+    
+    Arguments
+    ---------
+    postProcessing : str
+        Method: 'None' (rounding) or 'zScore' (normalization).
+    data : ndarray, shape (T, N, N)
+        3D input data to postprocess.
+    parameters : list
+        [accuracy] - decimal places for rounding (int).
+    
+    Returns
+    -------
+    ndarray, shape (T, N, N)
+        Postprocessed data.
+    """
     if postProcessing == "None":
         accuracy = int16(parameters[0])
         return np.around(data, accuracy)
@@ -154,28 +224,34 @@ def apply_PostProcessing(postProcessing, data, parameters):
 ## Pearson Correlation
 @njit(float64[:,:,:](float64[:,:], int16, int16, string, ListType(float64), string, ListType(float64), string, ListType(float64)), parallel=True) 
 def numba_rolling_PearCorr(data, window, accuracy=8, preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):
-    """Cross-column correlation with rolling window. 
-    Implementation does not use any optimization regarding rolling window
-    but is quite fast due to numba-usage. 
-
-    Args:
-        data (ndarray): 2D array containing the time-series data. Expected shape is 
-                        (T,N), where T and N represents the total time and number 
-                        of parallel channels, respectively. 
-        window (int): Lenght of observer window.
-        accuracy (int, optional): Controll over the significant places of the result.
-                                  Defaults to 8.
-        rect (boolean, optional): Flag to control whether the data is superimposed by a rectangle
-                                  signal. Default to False.
-        A (float, optional): Amplitude of rectangle signal relative to median of STD. Default is 0.1.
-        P (int, optional): Number of periods of rectangle signal added to the signal. Signal is distributed
-                           over the given sample size. Defaults to 2.
-
-    Returns:
-        ndarray: 3D array containing the Cross-Pearson-Correlation values at each point in time.
-                 Shape of result is (T,N,N), where T and N represents the total time and number
-                 of parallel channels, respectively.
-    """   
+    """Calculate Pearson correlation matrix in rolling windows.
+    
+    Arguments
+    ---------
+    data : ndarray, shape (T, N)
+        Input time-series data.
+    window : int
+        Rolling window size.
+    accuracy : int, optional
+        Decimal rounding precision. Default 8.
+    preProcessing : str, optional
+        Preprocessing method: 'None', 'Min-Downsample', or 'Mean-Downsample'. Default 'None'.
+    preParameters : list of float, optional
+        Preprocessing parameters: [downsampling_factor].
+    midProcessing : str, optional
+        Mid-processing method: 'None' or 'Rectangle'. Default 'None'.
+    midParameters : list of float, optional
+        Mid-processing parameters: [amplitude, period].
+    postProcessing : str, optional
+        Post-processing method: 'None' or 'zScore'. Default 'None'.
+    postParameters : list of float, optional
+        Post-processing parameters: [accuracy].
+    
+    Returns
+    -------
+    ndarray, shape (T, N, N)
+        Pearson correlation matrix at each time point.
+    """
     data, window = apply_PreProcessing(preProcessing,data,window, preParameters)
     T=data.shape[0]
     N=data.shape[1]
@@ -198,18 +274,27 @@ def numba_rolling_PearCorr(data, window, accuracy=8, preProcessing="None", prePa
     return windows
 
 ## Intraclass Correlation 
+# Highly recommend Liljequist et al. (2019) DOI: 10.1371/journal.pone.0219854 as overview of ICC types due to the explanation for non-specialists
+# Li et al. (2018) DOI: 10.1016/j.measurement.2017.11.034 claim to use the ICC as well but are not in line with the established definitions of ICC 
+# but seem to calculate a Pearson correlation instead. 
+# Important note: Despite other statements in literature, ICC is not bounded between 0 and 1 but can also be negative!
 @njit(float64(float64[:,:]))
 def ICC_1(X):
-    """Numba implementation of default ICC ICC(1) as introduced by Fisher.
-    See Liljequist.2019 for reference.
+    """Calculate ICC(1) - one-way random effects model.
 
-    Args:
-        X (ndarray): Data for which the ICC is calculated. Expected shape is
-                     (T,N), where T and N represent the "subject" and the "rater",
-                     respectively.
+    Arguments
+    ---------
+    X : ndarray, shape (T, N)
+        Data where T represents subjects and N represents raters.
 
-    Returns:
-        ndarray: ICC(1) value of the given data.
+    Returns
+    -------
+    float
+        ICC(1) value.
+    
+    References
+    ----------
+    Liljequist et al. (2019) DOI: 10.1371/journal.pone.0219854
     """    
     n=X.shape[0]
     k=X.shape[1]
@@ -223,16 +308,21 @@ def ICC_1(X):
 
 @njit(float64(float64[:,:]))
 def ICC_C1(X):
-    """Numba implementation of ICC ICC(C,1).
-    See Liljequist.2019 for reference.
+    """Calculate ICC(C,1) - two-way random effects, consistency model.
 
-    Args:
-        X (ndarray): Data for which the ICC is calculated. Expected shape is
-                     (T,N), where T and N represent the "subject" and the "rater",
-                     respectively.
+    Arguments
+    ---------
+    X : ndarray, shape (T, N)
+        Data where T represents subjects and N represents raters.
 
-    Returns:
-        ndarray: ICC(C,1) value of the given data.
+    Returns
+    -------
+    float
+        ICC(C,1) value.
+    
+    References
+    ----------
+    Liljequist et al. (2019) DOI: 10.1371/journal.pone.0219854
     """  
     n=X.shape[0]
     k=X.shape[1]
@@ -249,16 +339,21 @@ def ICC_C1(X):
 
 @njit(float64(float64[:,:]))
 def ICC_A1(X):
-    """Numba implementation of ICC ICC(A,1).
-    See Liljequist.2019 for reference.
+    """Calculate ICC(A,1) - two-way random effects, absolute agreement model.
 
-    Args:
-        X (ndarray): Data for which the ICC is calculated. Expected shape is
-                     (T,N), where T and N represent the "subject" and the "rater",
-                     respectively.
+    Arguments
+    ---------
+    X : ndarray, shape (T, N)
+        Data where T represents subjects and N represents raters.
 
-    Returns:
-        ndarray: ICC(A,1) value of the given data.
+    Returns
+    -------
+    float
+        ICC(A,1) value.
+    
+    References
+    ----------
+    Liljequist et al. (2019) DOI: 10.1371/journal.pone.0219854
     """  
     n=X.shape[0]
     k=X.shape[1]
@@ -276,32 +371,39 @@ def ICC_A1(X):
 
 @njit(float64[:,:,:](float64[:,:], int16, string, int16, string, ListType(float64), string, ListType(float64), string, ListType(float64)), parallel=True)
 def numba_rolling_ICC(data, window, kind="ICC(1)", accuracy=8, preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):
-    """Cross-column ICC calculation of various kinds with rolling window. 
-    Implementation does not use any optimization regarding rolling window
-    but is quite fast due to numba-usage.
-    Optional Data-preprocessing by addition of rectangle signal. 
-
-    Args:
-        data (ndarray): Data for which the ICC is calculated. Expected shape is
-                        (T,N), where T and N represent the "subject" and the "rater",
-                        respectively.
-        window (int): Lenght of observer window.
-        accuracy (int, optional): Controll over the significant places of the result.
-                                  Defaults to 8.
-        kind (str, optional): Defines the kind of ICC [ICC(1), ICC(A,1), ICC(C,1)] calculated. Defaults to "ICC(1)".
-        rect (bool, optional): Flag to control whether the data is superimposed by a rectangle
-                                  signal. Defaults to False.
-        A (float, optional): Amplitude of rectangle signal relative to median of STD. Defaults to 0.1.
-        P (int, optional): Number of periods of rectangle signal added to the signal. Signal is distributed
-                           over the given sample size. Defaults to 2.
-
-    Raises:
-        ValueError: If the provided kind is not implemented. 
-
-    Returns:
-        ndarray: 3D array containing the Intraclass-Correlation values at each point in time.
-                 Shape of result is (T,N,N), where T and N represents the total time and number
-                 of parallel channels, respectively.
+    """Calculate intraclass correlation matrix in rolling windows.
+    
+    Arguments
+    ---------
+    data : ndarray, shape (T, N)
+        Input time-series data.
+    window : int
+        Rolling window size.
+    kind : str, optional
+        ICC type: 'ICC(1)', 'ICC(A,1)', or 'ICC(C,1)'. Default 'ICC(1)'.
+    accuracy : int, optional
+        Decimal rounding precision. Default 8.
+    preProcessing : str, optional
+        Preprocessing method: 'None', 'Min-Downsample', or 'Mean-Downsample'. Default 'None'.
+    preParameters : list of float, optional
+        Preprocessing parameters: [downsampling_factor].
+    midProcessing : str, optional
+        Mid-processing method: 'None' or 'Rectangle'. Default 'None'.
+    midParameters : list of float, optional
+        Mid-processing parameters: [amplitude, period].
+    postProcessing : str, optional
+        Post-processing method: 'None' or 'zScore'. Default 'None'.
+    postParameters : list of float, optional
+        Post-processing parameters: [accuracy].
+    
+    Returns
+    -------
+    ndarray, shape (T, N, N)
+        ICC matrix at each time point.
+    
+    References
+    ----------
+    Liljequist et al. (2019) DOI: 10.1371/journal.pone.0219854
     """    
     if kind == "ICC(1)":
         ICC_func=ICC_1
@@ -341,10 +443,16 @@ def numba_rolling_ICC(data, window, kind="ICC(1)", accuracy=8, preProcessing="No
 
 #endregion
 #region Cross-Entropy
-@njit(float64(float64[:], float64[:], int16, float64), parallel=True, fastmath=True) # Parallel inmproves speed by 20x
+
+# Note: EntropyHub (https://pypi.org/project/EntropyHub/) and py-msentropy 
+# (https://github.com/antoine-jamin/py-msentropy) also provide cross-entropy implementations
+# but produce slightly different results despite citing the same reference. 
+# This implementation uses custom Numba optimization for better performance.
+@njit(float64(float64[:], float64[:], int16, float64), parallel=True, fastmath=True)  # Parallel improves speed by ~20x
 def XSampEn(u, v, m, r):
+    """Calculate cross-sample entropy between two time series."""
     if (len(u) != len(v)):
-        raise Exception("Error : lenght of u different than lenght of v")
+        raise Exception("Error: length of u different than length of v")
     N = u.shape[0]
     dim=N-m
     A_d=np.empty((dim,dim))
@@ -352,11 +460,11 @@ def XSampEn(u, v, m, r):
     samples = sliding_window_view(np.vstack((u,v)).T, m+1, axis=0)
     for i in prange(0, dim ):
         for j in prange(0, dim ):
-            B_d[i,j] = np.max(np.abs(samples[i,0,:-1] - samples[j,1,:-1]))  #Optimierung Stand 3.3.24
+            B_d[i,j] = np.max(np.abs(samples[i,0,:-1] - samples[j,1,:-1]))  # Optimization as of March 3, 2024
             A_d[i,j] = np.max(np.abs(samples[i,0,:] - samples[j,1,:])) 
     totA=np.sum(A_d<=r)
     totB=np.sum(B_d<=r)
-    if totB == 0 or totA ==0:
+    if totB == 0 or totA ==0: # Return maximum if no match
         cse = np.log(N-m-1)+np.log(N-m)-np.log(2) #np.nan # Catch if no match was found
     else:
         cse = -np.log((totA/dim) / (totB/dim))/np.log(np.exp(1))
@@ -365,6 +473,7 @@ def XSampEn(u, v, m, r):
 
 @njit(float64(float64[:], float64[:], int16, float64), parallel=True, fastmath=True)
 def XApEn(u, v, m, r):
+    """Calculate cross-approximate entropy between two time series."""
     N=u.shape[0]
     dim=N-m+1
     samples1 = sliding_window_view(np.vstack((u,v)).T, m, axis=0)
@@ -383,7 +492,39 @@ def XApEn(u, v, m, r):
     return np.abs((1/(dim) * np.sum(np.log(C[0])))- (1/(dim-1) * np.sum(np.log(C[1]))))
 
 @njit(float64[:,:,:](float64[:,:], int16, int16, float64, int16, string, ListType(float64), string, ListType(float64), string, ListType(float64)), parallel=False)
-def numba_rolling_crossSampEn(data, window, m=2, r=0.2, accuracy=8, preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):     
+def numba_rolling_crossSampEn(data, window, m=2, r=0.2, accuracy=8, preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):
+    """Calculate cross-sample entropy matrix in rolling windows.
+    
+    Arguments
+    ---------
+    data : ndarray, shape (T, N)
+        Input time-series data.
+    window : int
+        Rolling window size.
+    m : int, optional
+        Embedding dimension. Default 2.
+    r : float, optional
+        Tolerance threshold (fraction of std). Default 0.2.
+    accuracy : int, optional
+        Decimal rounding precision. Default 8.
+    preProcessing : str, optional
+        Preprocessing method: 'None', 'Min-Downsample', or 'Mean-Downsample'. Default 'None'.
+    preParameters : list of float, optional
+        Preprocessing parameters: [downsampling_factor].
+    midProcessing : str, optional
+        Mid-processing method: 'None' or 'Rectangle'. Default 'None'.
+    midParameters : list of float, optional
+        Mid-processing parameters: [amplitude, period].
+    postProcessing : str, optional
+        Post-processing method: 'None' or 'zScore'. Default 'None'.
+    postParameters : list of float, optional
+        Post-processing parameters: [accuracy].
+    
+    Returns
+    -------
+    ndarray, shape (T, N, N)
+        Cross-sample entropy matrix at each time point.
+    """
     data, window = apply_PreProcessing(preProcessing,data,window, preParameters)
     T=data.shape[0]
     N=data.shape[1]
@@ -413,7 +554,39 @@ def numba_rolling_crossSampEn(data, window, m=2, r=0.2, accuracy=8, preProcessin
     return windows
 
 @njit(float64[:,:,:](float64[:,:], int16, int16, float64, int16, string, ListType(float64), string, ListType(float64), string, ListType(float64)), parallel=False)
-def numba_rolling_crossApEn(data, window, m=2, r=0.2, accuracy=8, preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):     
+def numba_rolling_crossApEn(data, window, m=2, r=0.2, accuracy=8, preProcessing="None", preParameters=List([10.0]),  midProcessing = "None", midParameters=List([0.1,2.0]), postProcessing="None", postParameters=List([1.0])):
+    """Calculate cross-approximate entropy matrix in rolling windows.
+    
+    Arguments
+    ---------
+    data : ndarray, shape (T, N)
+        Input time-series data.
+    window : int
+        Rolling window size.
+    m : int, optional
+        Embedding dimension. Default 2.
+    r : float, optional
+        Tolerance threshold (fraction of std). Default 0.2.
+    accuracy : int, optional
+        Decimal rounding precision. Default 8.
+    preProcessing : str, optional
+        Preprocessing method: 'None', 'Min-Downsample', or 'Mean-Downsample'. Default 'None'.
+    preParameters : list of float, optional
+        Preprocessing parameters: [downsampling_factor].
+    midProcessing : str, optional
+        Mid-processing method: 'None' or 'Rectangle'. Default 'None'.
+    midParameters : list of float, optional
+        Mid-processing parameters: [amplitude, period].
+    postProcessing : str, optional
+        Post-processing method: 'None' or 'zScore'. Default 'None'.
+    postParameters : list of float, optional
+        Post-processing parameters: [accuracy].
+    
+    Returns
+    -------
+    ndarray, shape (T, N, N)
+        Cross-approximate entropy matrix at each time point.
+    """
     data, window = apply_PreProcessing(preProcessing,data,window, preParameters)
     T=data.shape[0]
     N=data.shape[1]

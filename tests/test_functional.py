@@ -6,7 +6,7 @@ import unittest
 import numpy as np
 from numba.typed import List
 from numba import int16
-from src.battdiag import cellEval, crossCellEval
+from battdiag import cellEval, crossCellEval
 
 print("✓ Running functional tests (no lokal EvalModupy dependency)")
 
