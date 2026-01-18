@@ -3,29 +3,14 @@ revision = 3
 requires-python = ">=3.12"
 
 [[package]]
-name = "antropy"
-version = "0.1.9"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "numba" },
-    { name = "numpy" },
-    { name = "scikit-learn" },
-    { name = "scipy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/11/3f/0dfc5d926a3b84234a864d5ea13f6ac3ffcef8bf63ad97426911d91f83dd/antropy-0.1.9.tar.gz", hash = "sha256:7c234464e065a566eaff4d367db31c0983ef669803ba7c4e35c74e1518adee21", size = 22835, upload-time = "2025-02-04T19:24:11.597Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9c/d0/45190403c56c3cd0c2784d5e4bc0def9e8301787b59113d15afd1337e654/antropy-0.1.9-py3-none-any.whl", hash = "sha256:b9926491579f6135a0b4461696410abbaf108b182f3d83f009787445625b0089", size = 18917, upload-time = "2025-02-04T19:24:10.155Z" },
-]
-
-[[package]]
 name = "battdiag"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "antropy" },
     { name = "numba" },
     { name = "numpy" },
     { name = "pynomaly" },
+    { name = "scikit-learn" },
 ]
 
 [package.dev-dependencies]
@@ -38,10 +23,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "antropy", specifier = ">=0.1.9" },
     { name = "numba", specifier = ">=0.63.1" },
     { name = "numpy", specifier = ">=2.2.5" },
     { name = "pynomaly", specifier = ">=0.3.4" },
+    { name = "scikit-learn", specifier = ">=1.4.1" },
 ]
 
 [package.metadata.requires-dev]

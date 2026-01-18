@@ -1,21 +1,20 @@
 [project]
 name = "battdiag"
 version = "0.1.0"
-description = "Add your description here"
+description = "Battery diagnostics functions to calculate fault signals based on the voltage in serial connected multi-cell battery modules."
 readme = "README.md"
+license = {text = "MIT"}
 authors = [
     { name = "Jacob Klink", email = "jacob.klink@tu-clausthal.de" }
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "antropy>=0.1.9",
     "numba>=0.63.1",
     "numpy>=2.2.5",
     "pynomaly>=0.3.4",
+    "scikit-learn>=1.4.1",
 ]
 
-[project.scripts]
-battdiag = "battdiag:main"
 
 [build-system]
 requires = ["uv_build>=0.9.21,<0.10.0"]
