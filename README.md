@@ -1,11 +1,12 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![Tests](https://github.com/JAC28/BattDiag/workflows/Tests/badge.svg)](https://github.com/JAC28/BattDiag/actions/workflows/tests.yml)
 
 # BattDiag - Battery Diagnostics Functions
 
 A Python package for multi-cell battery analysis providing single-cell and cross-cell diagnostics (statistical measures, entropy metrics, anomaly detection).
 
-**Supplementary Material**: This repository accompanies the academic paper draft *Comparative evaluation of data-based methods for detection of internal short circuits on cell-level*. The code is provided as supplementary material to ensure reproducibility and transparency. For the official manuscript, see the citation section below and the link to the paper after acceptance.
+**Supplementary Material**: This repository accompanies the academic paper draft *Comparative evaluation of data-based methods for detection of internal short circuits on cell-level* that investigates the detectability of ISC faults. By publishing the algorithm basis, the authors encourage the reader to implement the algorithms on their own or extent the range of algorithms. For the official manuscript, see the citation section below and the link to the paper after acceptance.
 
 ## Overview
 
@@ -116,3 +117,11 @@ This project used GitHub Copilot for preparing the developed functions for publi
 - numpy: Array operations
 - scikit-learn: Statistical methods
 - PyNomaly: Outlier detection
+
+## Contact
+
+**Jacob Klink**  
+Research Center Energy Storage Technology 
+Clausthal University of Technology  
+📧jacob.klink@tu-clausthal.de  
+🆔 ORCID: [0000-0003-3276-4446](https://orcid.org/0000-0003-3276-4446)
